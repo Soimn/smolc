@@ -59,6 +59,16 @@ typedef struct SC_Text
     SC_u32 length;
 } SC_Text;
 
+SC_Text
+SC_Text_FromEndpoints(SC_File_Pos p0, SC_File_Pos p1)
+{
+	SC_ASSERT(p0.file == p1.file && p0.offset <= p1.offset && p0.line <= p1.line);
+	return (SC_Text){
+		.file_pos = p0,
+		.length   = p1.offset - p0.offset,
+	};
+}
+
 typedef enum SC_Token_Kind
 {
     SC_Token_Invalid = 0,
@@ -83,9 +93,9 @@ typedef struct SC_Token
 typedef struct SC_Lexer
 {
     SC_String string;
+    SC_File_Pos cursor;
     SC_Text current_text;
     SC_Text peek_text;
-    SC_File_Pos cursor;
     SC_i8 current;
     SC_i8 peek;
 } SC_Lexer;
@@ -117,12 +127,142 @@ SC_Lexer__IsHexAlphaDigit(SC_u8 c)
     return ((SC_u8)((c & 0xDF) - 'A') <= (SC_u8)('F' - 'A'));
 }
 
-void
-SC_Lexer__NextChar(SC_Lexer* lexer)
+// NOTE: -1 used for errors, caught in NextToken
+char
+SC_Lexer__NextChar(SC_Lexer* lexer, SC_Text* result_text)
 {
-    // -1 used for errors, caught in NextToken
-    // trigraphs, backspaced newlines, line and col count
-    SC_NOT_IMPLEMENTED;
+	char result = -1;
+
+	SC_File_Pos start_pos = lexer->cursor;
+
+	for (;;)
+	{
+		if (lexer->string.size == 0)
+		{
+			result = 0;
+			break;
+		}
+		else
+		{
+			char c = lexer->string.data[0];
+			if (c == '\n')
+			{
+				lexer->string.data += 1;
+				lexer->string.size -= 1;
+				lexer->cursor.line += 1;
+				lexer->cursor.col   = 0;
+				result = '\n';
+				break;
+			}
+			// TODO: Carriage return is not specified as whitespace in the standard, but is regarded as it in this implementation.
+			//       This is to avoid having to canonicalize line endings.
+			else if (c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r')
+			{
+				while (lexer->string.size != 0)
+				{
+					c = lexer->string.data[0];
+					if (c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r')
+					{
+						lexer->string.data += 1;
+						lexer->string.size -= 1;
+						lexer->cursor.col  += 1;
+						continue;
+					}
+					else break;
+				}
+
+				result = ' ';
+				break;
+			}
+			else if (lexer->string.size >= 2 && lexer->string.data[0] == '\\' && lexer->string.data[1] == '\n')
+			{
+				lexer->string.data += 2;
+				lexer->string.size -= 2;
+				lexer->cursor.line += 1;
+				lexer->cursor.col   = 0;
+				continue;
+			}
+			else if (lexer->string.size >= 2 && lexer->string.data[0] == '?' && lexer->string.data[1] == '?')
+			{
+				if (lexer->string.size < 3)
+				{
+					//// ERROR: Incomplete trigraph sequence
+					result = -1;
+					break;
+				}
+				else
+				{
+					c = lexer->string.data[2];
+					lexer->string.data += 3;
+					lexer->string.size -= 3;
+					lexer->cursor.col  += 3;
+
+					switch (c)
+					{
+						case '=': result = '#';  break;
+						case '(': result = '[';  break;
+						case '/': result = '\\'; break;
+						case ')': result = ']';  break;
+						case ''': result = '^';  break;
+						case '<': result = '{';  break;
+						case '!': result = '|';  break;
+						case '>': result = '}';  break;
+						case '-': result = '~';  break;
+						default:
+						{
+							//// ERROR: Unknown trigraph sequence
+							result = -1;
+						} break;
+					}
+
+					break;
+				}
+			}
+			else
+			{
+				lexer->string.data += 1;
+				lexer->string.size -= 1;
+				lexer->cursor.col  += 1;
+
+				// TODO: check if c is a valid source char?
+				result = c;
+				break;
+			}
+		}
+	}
+
+	*result_text = SC_Text_FromEndpoints(start_pos, lexer->cursor);
+
+	return result;
+}
+
+void
+SC_Lexer__Advance(SC_Lexer* lexer, SC_umm amount)
+{
+	for (SC_umm i = 0; i < amount; ++i)
+	{
+		lexer->current      = lexer->peek;
+		lexer->current_text = lexer->peek_text;
+		
+		lexer->peek = SC_Lexer__NextChar(lexer, &lexer->peek_text);
+	}
+}
+
+SC_bool
+SC_Lexer__ParseUniversalCharacterName(SC_Lexer* lexer, SC_u32* codepoint)
+{
+	SC_ASSERT(lexer->string.size >= 2 && lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'));
+	SC_umm digit_count = (lexer->peek == 'u' ? 4 : 8);
+	SC_Lexer__Advance(lexer, 2);
+
+	SC_bool encountered_errors = SC_false;
+
+	for (SC_umm i = 0; i < digit_count; ++i)
+	{
+		if (SC_Lexer__IsHexAlphaDigit(lexer->current)) di
+	}
+
+	return !encountered_errors;
 }
 
 SC_Token
@@ -130,13 +270,40 @@ SC_Lexer_NextToken(SC_Lexer* lexer)
 {
     SC_Token result = { .kind = SC_Token_Invalid };
     
-    SC_NOT_IMPLEMENTED;
-    
-    if (lexer->current == '\n')
-    {
-        result.kind = SC_Token_Newline;
-        SC_NOT_IMPLEMENTED;
-    }
+		for (;;)
+		{
+			// NOTE: All whitespace is canonicalized to a single space
+			if (lexer->current == ' ')
+			{
+				SC_Lexer__Advance(lexer, 1);
+				continue;
+			}
+			else if (lexer->current == '/' && lexer->peek == '/')
+			{
+				while (lexer->current != 0 && lexer->current != '\n') SC_Lexer__Advance(lexer, 1);
+				continue;
+			}
+			else if (lexer->current == '/' && lexer->peek == '*')
+			{
+				SC_Lexer__Advance(lexer, 2);
+
+				while (lexer->current != 0 && !(lexer->current == '*' && lexer->peek == '/')) SC_Lexer__Advance(lexer, 1);
+
+				if (lexer->current == 0)
+				{
+					//// ERROR: Unterminate block comment
+					SC_NOT_IMPLEMENTED;
+				}
+				else
+				{
+					SC_Lexer__Advance(lexer, 1);
+					continue;
+				}
+			}
+			else break;
+		}
+
+    if      (lexer->current == '\n') result.kind = SC_Token_Newline;
     else if (SC_Lexer__IsAlpha(lexer->current) || lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
     {
         result.kind = SC_Token_Identifier;
