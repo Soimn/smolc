@@ -257,11 +257,30 @@ SC_Lexer__ParseUniversalCharacterName(SC_Lexer* lexer, SC_u32* codepoint)
 
 	SC_bool encountered_errors = SC_false;
 
+	SC_umm codepoint_acc = 0;
 	for (SC_umm i = 0; i < digit_count; ++i)
 	{
-		if (SC_Lexer__IsHexAlphaDigit(lexer->current)) di
+		SC_u8 digit;
+		if      (SC_Lexer__IsDigit(lexer->current))         digit = lexer->current - '0';
+		else if (SC_Lexer__IsHexAlphaDigit(lexer->current)) digit = ((lexer->current & 0xDF) - 'A') + 9;
+		else
+		{
+			//// ERROR: Missing digits in universal character name
+			encountered_errors = !SC_false;
+			break;
+		}
+		
+		codepoint_acc = (codepoint_acc << 4) | digit;
 	}
 
+	if (codepoint_acc < 0xA0 && codepoint_acc != 0x24 && codepoint_acc != 0x40 && codepoint_acc != 0x60 ||
+			codepoint_acc >= 0xD800 && codepoint_acc <= 0xDFFF)
+	{
+		//// ERROR: Invalid universal character name
+		encountered_errors = !SC_false;
+	}
+
+	*codepoint = codepoint_acc;
 	return !encountered_errors;
 }
 
@@ -304,10 +323,29 @@ SC_Lexer_NextToken(SC_Lexer* lexer)
 		}
 
     if      (lexer->current == '\n') result.kind = SC_Token_Newline;
-    else if (SC_Lexer__IsAlpha(lexer->current) || lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
+    else if (SC_Lexer__IsAlpha(lexer->current) || lexer->current == '_' || lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
     {
         result.kind = SC_Token_Identifier;
         SC_NOT_IMPLEMENTED;
+
+				if (SC_Lexer__IsAlpha(lexer->current) || SC_Lexer__IsDigit(lexer->current) || lexer->current == '_')
+				{
+					SC_NOT_IMPLEMENTED;
+				}
+				else if (lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
+				{
+					SC_u32 codepoint;
+					if (!SC_Lexer__ParseUniversalCharacterName(lexer, &codepoint))
+					{
+						//// ERROR
+						result = -1;
+						break; // -
+					}
+					else
+					{
+						SC_NOT_IMPLEMENTED;
+					}
+				}
     }
     else if (SC_Lexer__IsDigit(lexer->current))
     {
