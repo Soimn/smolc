@@ -1,3 +1,5 @@
+#define SC_MAX_IDENTIFIER_LENGTH 4096
+
 #if defined(_WIN32)
 
 #if !defined(_WIN64) || _WIN64 != 1
@@ -31,9 +33,69 @@ typedef struct SC_String
 } SC_String;
 #define SC_STRING(S) (SC_String){ .data = (SC_u8*)(S), .size = sizeof(S) - 1 }
 
-#define SC_ASSERT(EX) ((EX) ? 1 : *(volatile int*)0 = 0)
+#define SC_ASSERT(EX) ((EX) ? 1 : (*(volatile int*)0 = 0, 0))
 #define SC_NOT_IMPLEMENTED SC_ASSERT(!"SC_NOT_IMPLEMENTED")
 #define SC_INVALID_DEFAULT_CASE SC_ASSERT(!"SC_INVALID_DEFAULT_CASE")
+
+#define SC_ARENA_PAGE_SIZE 4096
+
+typedef struct SC_Arena
+{
+    SC_u64 base_address;
+    SC_u64 offset;
+    SC_u64 commit_size;
+} SC_Arena;
+
+typedef void SC_Arena_Marker;
+
+SC_Arena*
+SC_Arena_Init(SC_umm reserve_size, SC_umm commit_size)
+{
+    SC_Arena* arena = 0;
+    
+    SC_NOT_IMPLEMENTED;
+    
+    return arena;
+}
+
+void*
+SC_Arena_Push(SC_Arena* arena, SC_umm size, SC_u8 alignment)
+{
+    void* result = 0;
+    
+    SC_NOT_IMPLEMENTED;
+    
+    return result;
+}
+
+void
+SC_Arena_Pop(SC_Arena* arena, SC_umm size)
+{
+    SC_NOT_IMPLEMENTED;
+}
+
+SC_Arena_Marker*
+SC_Arena_GetMarker(SC_Arena* arena)
+{
+    SC_Arena_Marker* result = 0;
+    
+    SC_NOT_IMPLEMENTED;
+    
+    return result;
+}
+
+void
+SC_Arena_PopToMarker(SC_Arena* arena, SC_Arena_Marker* marker)
+{
+    SC_NOT_IMPLEMENTED;
+}
+
+typedef struct SC_State
+{
+    SC_Arena* string_arena;
+} SC_State;
+
+SC_State SC_GlobalState;
 
 /*
 text -> tokens -> preprocessed tokens -> AST
@@ -132,9 +194,9 @@ char
 SC_Lexer__NextChar(SC_Lexer* lexer, SC_Text* result_text)
 {
 	char result = -1;
-
+    
 	SC_File_Pos start_pos = lexer->cursor;
-
+    
 	for (;;)
 	{
 		if (lexer->string.size == 0)
@@ -170,7 +232,7 @@ SC_Lexer__NextChar(SC_Lexer* lexer, SC_Text* result_text)
 					}
 					else break;
 				}
-
+                
 				result = ' ';
 				break;
 			}
@@ -196,25 +258,25 @@ SC_Lexer__NextChar(SC_Lexer* lexer, SC_Text* result_text)
 					lexer->string.data += 3;
 					lexer->string.size -= 3;
 					lexer->cursor.col  += 3;
-
+                    
 					switch (c)
 					{
-						case '=': result = '#';  break;
-						case '(': result = '[';  break;
-						case '/': result = '\\'; break;
-						case ')': result = ']';  break;
-						case ''': result = '^';  break;
-						case '<': result = '{';  break;
-						case '!': result = '|';  break;
-						case '>': result = '}';  break;
-						case '-': result = '~';  break;
+						case '=':  result = '#';  break;
+						case '(':  result = '[';  break;
+						case '/':  result = '\\'; break;
+						case ')':  result = ']';  break;
+						case '\'': result = '^';  break;
+                        case '<':  result = '{';  break;
+						case '!':  result = '|';  break;
+						case '>':  result = '}';  break;
+						case '-':  result = '~';  break;
 						default:
 						{
 							//// ERROR: Unknown trigraph sequence
 							result = -1;
 						} break;
 					}
-
+                    
 					break;
 				}
 			}
@@ -223,16 +285,16 @@ SC_Lexer__NextChar(SC_Lexer* lexer, SC_Text* result_text)
 				lexer->string.data += 1;
 				lexer->string.size -= 1;
 				lexer->cursor.col  += 1;
-
+                
 				// TODO: check if c is a valid source char?
 				result = c;
 				break;
 			}
 		}
 	}
-
+    
 	*result_text = SC_Text_FromEndpoints(start_pos, lexer->cursor);
-
+    
 	return result;
 }
 
@@ -254,9 +316,9 @@ SC_Lexer__ParseUniversalCharacterName(SC_Lexer* lexer, SC_u32* codepoint)
 	SC_ASSERT(lexer->string.size >= 2 && lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'));
 	SC_umm digit_count = (lexer->peek == 'u' ? 4 : 8);
 	SC_Lexer__Advance(lexer, 2);
-
+    
 	SC_bool encountered_errors = SC_false;
-
+    
 	SC_umm codepoint_acc = 0;
 	for (SC_umm i = 0; i < digit_count; ++i)
 	{
@@ -272,14 +334,14 @@ SC_Lexer__ParseUniversalCharacterName(SC_Lexer* lexer, SC_u32* codepoint)
 		
 		codepoint_acc = (codepoint_acc << 4) | digit;
 	}
-
+    
 	if (codepoint_acc < 0xA0 && codepoint_acc != 0x24 && codepoint_acc != 0x40 && codepoint_acc != 0x60 ||
-			codepoint_acc >= 0xD800 && codepoint_acc <= 0xDFFF)
+        codepoint_acc >= 0xD800 && codepoint_acc <= 0xDFFF)
 	{
 		//// ERROR: Invalid universal character name
 		encountered_errors = !SC_false;
 	}
-
+    
 	*codepoint = codepoint_acc;
 	return !encountered_errors;
 }
@@ -289,63 +351,83 @@ SC_Lexer_NextToken(SC_Lexer* lexer)
 {
     SC_Token result = { .kind = SC_Token_Invalid };
     
-		for (;;)
-		{
-			// NOTE: All whitespace is canonicalized to a single space
-			if (lexer->current == ' ')
-			{
-				SC_Lexer__Advance(lexer, 1);
-				continue;
-			}
-			else if (lexer->current == '/' && lexer->peek == '/')
-			{
-				while (lexer->current != 0 && lexer->current != '\n') SC_Lexer__Advance(lexer, 1);
-				continue;
-			}
-			else if (lexer->current == '/' && lexer->peek == '*')
-			{
-				SC_Lexer__Advance(lexer, 2);
-
-				while (lexer->current != 0 && !(lexer->current == '*' && lexer->peek == '/')) SC_Lexer__Advance(lexer, 1);
-
-				if (lexer->current == 0)
-				{
-					//// ERROR: Unterminate block comment
-					SC_NOT_IMPLEMENTED;
-				}
-				else
-				{
-					SC_Lexer__Advance(lexer, 1);
-					continue;
-				}
-			}
-			else break;
-		}
-
+    for (;;)
+    {
+        // NOTE: All whitespace is canonicalized to a single space
+        if (lexer->current == ' ')
+        {
+            SC_Lexer__Advance(lexer, 1);
+            continue;
+        }
+        else if (lexer->current == '/' && lexer->peek == '/')
+        {
+            while (lexer->current != 0 && lexer->current != '\n') SC_Lexer__Advance(lexer, 1);
+            continue;
+        }
+        else if (lexer->current == '/' && lexer->peek == '*')
+        {
+            SC_Lexer__Advance(lexer, 2);
+            
+            while (lexer->current != 0 && !(lexer->current == '*' && lexer->peek == '/')) SC_Lexer__Advance(lexer, 1);
+            
+            if (lexer->current == 0)
+            {
+                //// ERROR: Unterminate block comment
+                SC_NOT_IMPLEMENTED;
+            }
+            else
+            {
+                SC_Lexer__Advance(lexer, 1);
+                continue;
+            }
+        }
+        else break;
+    }
+    
     if      (lexer->current == '\n') result.kind = SC_Token_Newline;
     else if (SC_Lexer__IsAlpha(lexer->current) || lexer->current == '_' || lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
     {
         result.kind = SC_Token_Identifier;
-        SC_NOT_IMPLEMENTED;
-
-				if (SC_Lexer__IsAlpha(lexer->current) || SC_Lexer__IsDigit(lexer->current) || lexer->current == '_')
-				{
-					SC_NOT_IMPLEMENTED;
-				}
-				else if (lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
-				{
-					SC_u32 codepoint;
-					if (!SC_Lexer__ParseUniversalCharacterName(lexer, &codepoint))
-					{
-						//// ERROR
-						result = -1;
-						break; // -
-					}
-					else
-					{
-						SC_NOT_IMPLEMENTED;
-					}
-				}
+        
+        SC_Arena_Marker* marker = SC_Arena_GetMarker(SC_GlobalState->string_arena);
+        
+        SC_String identifier;
+        identifier.data = SC_Arena_Push(SC_GlobalState->string_arena, SC_MAX_IDENTIFIER_LENGTH);
+        identifier.size = 0;
+        
+        for (;;)
+        {
+            if (SC_Lexer__IsAlpha(lexer->current) || SC_Lexer__IsDigit(lexer->current) || lexer->current == '_')
+            {
+                if (identifier.size >= SC_MAX_IDENTIFIER_LENGTH)
+                {
+                    //// ERROR: Identifier is too long
+                    result = -1;
+                    SC_NOT_IMPLEMENTED;
+                }
+                else
+                {
+                    identifier.data[identifier.size] = lexer->current;
+                    identifier.size += 1;
+                }
+            }
+            else if (lexer->current == '\\' && (lexer->peek == 'u' || lexer->peek == 'U'))
+            {
+                SC_u32 codepoint;
+                if (!SC_Lexer__ParseUniversalCharacterName(lexer, &codepoint))
+                {
+                    //// ERROR
+                    result = -1;
+                    break; // -
+                }
+                else
+                {
+                    // TODO: Check is the codepoint fits in SC_MAX_IDENTIFIER_LENGTH
+                    SC_NOT_IMPLEMENTED;
+                }
+            }
+            else break;
+        }
     }
     else if (SC_Lexer__IsDigit(lexer->current))
     {
